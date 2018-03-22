@@ -24,7 +24,7 @@ const singleSelect = {
   }]
 };
 
-const multiSelects = Object.assign({}, workflow.tasks.dropdown);
+const multiSelects = workflow.tasks.dropdown;
 
 // multiSelects:
 //   1 - Country (required:true)
