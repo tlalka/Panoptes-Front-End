@@ -39,7 +39,10 @@ export default class ProjectPage extends React.Component {
 
   render() {
     return (
-      <div className="project-page">
+      <div
+        lang={this.props.translations.locale}
+        className="project-page"
+      >
         <ProjectNavbar
           background={this.props.background}
           loading={this.props.loading}
@@ -107,6 +110,9 @@ ProjectPage.defaultProps = {
     id: '',
     display_name: ''
   },
+  translations: {
+    locale: 'en'
+  },
   user: null,
   workflow: null
 };
@@ -140,6 +146,9 @@ ProjectPage.propTypes = {
   routes: PropTypes.array,
   translation: PropTypes.shape({
     display_name: PropTypes.string
+  }),
+  translations: PropTypes.shape({
+    locale: PropTypes.string
   }),
   workflow: PropTypes.shape({
     id: PropTypes.string
