@@ -1,51 +1,42 @@
 React = require 'react'
 createReactClass = require 'create-react-class'
 DrawingToolRoot = require('./root').default
+DragHandle = require './drag-handle'
+Draggable = require '../../lib/draggable'
 deleteIfOutOfBounds = require './delete-if-out-of-bounds'
 DeleteButton = require './delete-button'
-{createPathFromCoords, filterDupeCoords, roundCoords} = require './freehand-helpers'
 
-BUFFER = 16
-DELETE_BUTTON_WIDTH = 8
 FINISHER_RADIUS = 8
-GRAB_STROKE_WIDTH = 20
-MINIMUM_LENGTH = 20
-POINT_RADIUS = 4
+GRAB_STROKE_WIDTH = 6
+BUFFER = 16
+
+DELETE_BUTTON_WEIGHT = 5 # Weight of the second point.
 
 module.exports = createReactClass
-  displayName: 'Poly2'
+  displayName: 'PolygonTool'
 
   statics:
     initCoords: null
 
-    defaultValues: ->
+    defaultValues: ({x, y}) ->
       points: []
-      _inProgress: false
-      _currentlyDrawing: false
+      closed: false
 
-    initStart: (coords, mark) ->
-      mark.points.push roundCoords coords
+    initStart: ({x, y}, mark) ->
+      mark.points.push {x, y}
+      points: mark.points
       _inProgress: true
-      _currentlyDrawing: true
 
-    initMove: (coords, mark) ->
-      mark.points.push roundCoords coords
-
-    initRelease: (coords, mark) ->
-      _currentlyDrawing: false
-      points: filterDupeCoords mark.points
+    initMove: ({x, y}, mark) ->
+      mark.points[mark.points.length - 1] = {x, y}
+      points: mark.points
 
     isComplete: (mark) ->
-      !mark._inProgress
+      mark.closed
 
     forceComplete: (mark) ->
-      mark.points = filterDupeCoords mark.points
-      mark._inProgress = false
-      mark._currentlyDrawing = false
+      mark.closed = true
       mark.auto_closed = true
-
-  componentDidMount: ->
-    document.addEventListener 'mousemove', @handleMouseMove
 
   componentWillMount: ->
     @setState
@@ -53,27 +44,68 @@ module.exports = createReactClass
       mouseY: @props.mark.points[0].y
       mouseWithinViewer: true
 
+  componentDidMount: ->
+    document.addEventListener 'mousemove', @handleMouseMove
+
   componentWillUnmount: ->
     document.removeEventListener 'mousemove', @handleMouseMove
 
-  getDeletePosition: ([startCoords, otherCoords...]) ->
-    scale = (@props.scale.horizontal + @props.scale.vertical) / 2
-    mod = (BUFFER / scale)
-    x = startCoords.x - mod
-    x: if not @outOfBounds(x, scale) then x else startCoords.x + mod
-    y: startCoords.y
+  render: ->
+    averageScale = (@props.scale.horizontal + @props.scale.vertical) / 2
+    finisherRadius = FINISHER_RADIUS / averageScale
 
-  handleFinishClick: ->
-    document.removeEventListener 'mousemove', @handleMouseMove
-    @props.mark._inProgress = false
-    @props.mark._currentlyDrawing = false
-    @props.onChange @props.mark
+    firstPoint = @props.mark.points[0]
+    secondPoint = @props.mark.points[1]
+    secondPoint ?=
+      x: firstPoint.x + (finisherRadius * 2)
+      y: firstPoint.y - (finisherRadius * 2)
+    lastPoint = @props.mark.points[@props.mark.points.length - 1]
 
-  handleFinishHover: (e) ->
-    if e.type == 'mouseenter'
-      @setState lastPointHover: true
-    else if e.type == 'mouseleave'
-      @setState lastPointHover: false
+    points = ([x, y].join ',' for {x, y} in @props.mark.points)
+    if @props.mark.closed
+      points.push [firstPoint.x, firstPoint.y].join ','
+    points = points.join '\n'
+
+    deleteButtonPosition = @getDeletePosition(firstPoint, secondPoint)
+    pointerEvents = if @props.disabled then 'none' else 'painted'
+
+    <DrawingToolRoot tool={this} pointerEvents={pointerEvents}>
+      <Draggable onDrag={@handleMainDrag} onEnd={deleteIfOutOfBounds.bind null, this} disabled={@props.disabled}>
+        <polyline  points={points} fill={'none' unless @props.mark.closed} />
+      </Draggable>
+
+      {if @props.selected
+        <g>
+          <DeleteButton tool={this} x={deleteButtonPosition.x} y={deleteButtonPosition.y} getScreenCurrentTransformationMatrix={@props.getScreenCurrentTransformationMatrix} />
+
+          {if not @props.mark.closed and @props.mark.points.length and @state.mouseWithinViewer
+            <line className="guideline" x1={lastPoint.x} y1={lastPoint.y} x2={@state.mouseX} y2={@state.mouseY} />}
+
+          {if not @props.mark.closed and @props.mark.points.length > 2
+            <line className="guideline" x1={lastPoint.x} y1={lastPoint.y} x2={firstPoint.x} y2={firstPoint.y} />}
+
+          {for point, i in @props.mark.points
+            <DragHandle key={i} x={point.x} y={point.y} scale={@props.scale} onDrag={@handleHandleDrag.bind this, i} getScreenCurrentTransformationMatrix={@props.getScreenCurrentTransformationMatrix} />}
+
+          {unless @props.mark.closed
+            <g>
+              <circle className="clickable" r={finisherRadius} cx={firstPoint.x} cy={firstPoint.y} stroke="transparent" onClick={@handleFinishClick} />
+              <circle className="clickable" r={finisherRadius} cx={lastPoint.x} cy={lastPoint.y} onClick={@handleFinishClick} />
+            </g>}
+        </g>}
+    </DrawingToolRoot>
+
+  getDeletePosition: (firstPoint, secondPoint) ->
+    buffer = BUFFER / @props.scale.horizontal
+    x = (firstPoint.x + ((DELETE_BUTTON_WEIGHT - 1) * secondPoint.x)) / DELETE_BUTTON_WEIGHT
+    y = (firstPoint.y + ((DELETE_BUTTON_WEIGHT - 1) * secondPoint.y)) / DELETE_BUTTON_WEIGHT
+    for point in @props.mark.points
+      x = point.x - buffer if @calculateDistance(x, point.x, y, point.y) < buffer
+    x: x
+    y: y
+
+  calculateDistance: (deleteBtnX, handleBtnX, deleteBtnY, handleBtnY) ->
+    Math.sqrt(Math.pow(deleteBtnX - handleBtnX, 2) + Math.pow(deleteBtnY - handleBtnY, 2))
 
   handleMouseMove: (e) ->
     newCoord = @props.getEventOffset(e)
@@ -90,54 +122,22 @@ module.exports = createReactClass
       mouseY: newCoord.y
       mouseWithinViewer: mouseWithinViewer
 
-  outOfBounds: (deleteBtnX, scale) ->
-    deleteBtnX - (DELETE_BUTTON_WIDTH / scale) < 0
+  handleFinishClick: ->
+    document.removeEventListener 'mousemove', @handleMouseMove
 
-  render: ->
-    { _inProgress, _currentlyDrawing, points } = @props.mark
-    path = createPathFromCoords points
-    lineClass = if _inProgress then 'drawing' else 'clickable clickable-line'
+    @props.mark.closed = true
+    @props.mark._inProgress = false
+    @props.onChange @props.mark
 
-    <DrawingToolRoot tool={this}>
-      <path d={path}
-        fill="none"
-        strokeWidth={GRAB_STROKE_WIDTH / ((@props.scale.horizontal + @props.scale.vertical) / 2)}
-        stroke="transparent"
-        className={lineClass} />
-      <path d={path} fill="none" className={lineClass} />
+  handleMainDrag: (e, d) ->
+    for point in @props.mark.points
+      difference = @props.normalizeDifference(e, d)
+      point.x += difference.x
+      point.y += difference.y
+    @props.onChange @props.mark
 
-      {if @props.selected
-        deletePosition = @getDeletePosition points
-        [..., lastPoint] = points
-
-        <g>
-          <DeleteButton tool={this}
-            x={deletePosition.x}
-            y={deletePosition.y}
-            getScreenCurrentTransformationMatrix={@props.getScreenCurrentTransformationMatrix} />
-        </g>}
-
-      {if @props.selected and _inProgress and points.length and @state.mouseWithinViewer
-        <line className="guideline"
-          x1={lastPoint.x}
-          y1={lastPoint.y}
-          x2={@state.mouseX}
-          y2={@state.mouseY} />}
-
-      {if @props.selected and _inProgress and not _currentlyDrawing
-        averageScale = (@props.scale.horizontal + @props.scale.vertical) / 2
-        <g>
-          {if @state.lastPointHover
-            <circle r={FINISHER_RADIUS / averageScale} cx={lastPoint.x} cy={lastPoint.y} />}
-
-          <circle className="clickable"
-            r={POINT_RADIUS / averageScale}
-            cx={lastPoint.x}
-            cy={lastPoint.y}
-            onClick={@handleFinishClick}
-            onMouseEnter={@handleFinishHover}
-            onMouseLeave={@handleFinishHover}
-            fill="currentColor" />
-        </g>}
-      }
-    </DrawingToolRoot>
+  handleHandleDrag: (index, e, d) ->
+    difference = @props.normalizeDifference(e, d)
+    @props.mark.points[index].x += difference.x
+    @props.mark.points[index].y += difference.y
+    @props.onChange @props.mark
